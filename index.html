@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grain Structure Analysis</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Left Side - Input Section -->
+        <div class="input-section">
+            <h1>Grainify</h1>
+            <form id="analysis-form" action="/analyze" method="post" enctype="multipart/form-data">
+                <!-- File input for individual files -->
+                <label for="individual-files">Upload a grain map:</label>
+                <input type="file" id="individual-files" name="individual-files" accept="image/*" multiple>
+                <!-- Folder input for folder upload -->
+                <p id="file-feedback" style="color: red; display: none;">Please upload an image before adjusting settings.</p>
+                <select id="material" name="material">
+                    <option value="Steel" {% if structure == 'Steel' %}selected{% endif %}>Steel</option>
+                    <option value="Aluminum" {% if structure == 'Aluminum' %}selected{% endif %}>Aluminum</option>
+                    <option value="Copper" {% if structure == 'Copper' %}selected{% endif %}>Copper</option>
+                <!-- Add more materials as needed -->
+                </select>
+                <label for="conversion">Pixels To Micrometers</label>
+                <label for="conversion">Divide micrometers by pixels to find conversion</label>
+                <input type="range" id="conversion" name="conversion" min="0.0" max="10.0" step="0.01"  value="{{ conversion if conversion else 5 }}" required>
+                <span id="conversion-value">{{ conversion if conversion else 5 }}</span>
+                <p id="grain-size-output">{{ grain_avg_size if grain_avg_size else 'N/A' }}</p>
+                <p id="yield-strength-output">{{ hall_petch if hall_petch else 'N/A' }}</p>
+                <label for="sigma">Sigma (Blur):</label>
+                <input type="range" id="sigma" name="sigma" min="1" max="10" step="0.1" value="{{ sigma if sigma else 1.0 }}" required>
+                <span id="sigma-value">{{ sigma if sigma else 1.0 }}</span>
+                <label for="threshold">Threshold (%):</label>
+                <input type="range" id="threshold" name="threshold" min="0" max="100" value="{{ threshold if threshold else 50 }}" required>
+                <span id="threshold-value">{{ threshold if threshold else 50 }}</span>
+                <label for="high_threshold">High Threshold (%):</label>
+                <input type="range" id="high_threshold" name="high_threshold" min="0" max="100" value="{{ high_threshold if high_threshold else 150 }}" required>
+                <span id="high-threshold-value">{{ high_threshold if high_threshold else 150 }}</span>
+                <button type="submit">Analyze</button>
+            </form>
+            {% if traced_images %}
+                <br>
+                <a href="/clear" class="download-button">Clear Images</a>
+                <br><br>
+                <a href="/download?material={{ material }}&structure={{ structure }}&scale_micrometers={{ scale_micrometers }}&traced_images={{ traced_images | map(attribute='1') | join(',') }}" class="download-button">Download Traced Images</a>
+            {% endif %}
+        </div>
+
+        <!-- Right Side - Image Display Section -->
+        <div class="image-section">
+            <div class="image-box">
+                <div class="image-container">
+                    {% if traced_images %}
+                        {% for original_filename, traced_filename, combined_image_url in traced_images %}
+                            <img src="{{ combined_image_url }}" alt="Combined Image" class="combined-image">
+                        {% endfor %}
+                    {% else %}
+                        <p>Upload images or a folder to analyze and trace grain structures.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let debounceTimer;
+        let lastParams = {}; // Store last used values to detect actual changes
+
+        function debounceUpdateImage() {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(updateImage, 500); // Wait 500ms before sending request
+        }
+
+        function updateImage() {
+    const form = document.getElementById('analysis-form');
+    const formData = new FormData(form);
+
+    const newParams = {
+        conversion: formData.get('conversion'),
+        sigma: formData.get('sigma'),
+        threshold: formData.get('threshold'),
+        high_threshold: formData.get('high_threshold')
+    };
+
+    // Check if values actually changed before making a request
+    if (JSON.stringify(newParams) === JSON.stringify(lastParams)) {
+        console.log("No changes detected, skipping request.");
+        return;
+    }
+
+    lastParams = newParams; // Update stored values
+
+    // Show a loading indicator
+    const imageContainer = document.querySelector('.image-container');
+    imageContainer.innerHTML = '<p>Processing Image...</p>';
+
+    fetch('/update_image', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.error) {
+            console.error("Error:", data.error);
+            alert(data.error);
+            imageContainer.innerHTML = '<p style="color:red;">Error loading image.</p>';
+        } else if (data.combined_image_url) {
+            const newImg = new Image();
+            newImg.src = data.combined_image_url + `&cache_bust=${new Date().getTime()}`; // Prevents caching issues
+            newImg.className = 'combined-image';
+
+            newImg.onload = () => {
+                imageContainer.innerHTML = ''; // Remove loading text
+                imageContainer.appendChild(newImg);
+            };
+
+            newImg.onerror = () => {
+                console.error("Image failed to load:", newImg.src);
+                imageContainer.innerHTML = '<p style="color:red;">Image failed to load.</p>';
+            };
+
+            // Update grain size
+            document.getElementById('grain-size-output').textContent =
+                `Average Grain Size: ${parseFloat(data.grain_avg_size).toFixed(2)} µm`;
+
+            // Predicted Yield Strength Update
+            document.getElementById('yield-strength-output').textContent =
+                `Predicted Yield Strength: ${parseFloat(data.hall_petch).toFixed(2)} MPa`;
+
+        }
+
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('An error occurred while updating the image. Please try again.');
+        imageContainer.innerHTML = '<p style="color:red;">Failed to load image.</p>';
+    });
+}
+        // Attach event listeners with debounce
+
+        document.getElementById('conversion').addEventListener('input', function() {
+            document.getElementById('conversion-value').textContent = this.value;
+            debounceUpdateImage();
+        });
+
+        document.getElementById('material').addEventListener('change', function() {
+            debounceUpdateImage(); // Trigger image update when the dropdown value changes
+        });
+
+        document.getElementById('sigma').addEventListener('input', function() {
+            document.getElementById('sigma-value').textContent = this.value;
+            debounceUpdateImage();
+        });
+
+        document.getElementById('threshold').addEventListener('input', function() {
+            document.getElementById('threshold-value').textContent = this.value;
+            debounceUpdateImage();
+        });
+
+        document.getElementById('high_threshold').addEventListener('input', function() {
+            document.getElementById('high-threshold-value').textContent = this.value;
+            debounceUpdateImage();
+        });
+
+        // Ensure first request is only sent if an image exists
+        window.addEventListener('load', function() {
+            const individualFiles = document.getElementById('individual-files').files;
+            const folderFiles = document.getElementById('folder').files;
+            if (individualFiles.length > 0 || folderFiles.length > 0) {
+                updateImage();
+            }
+        });
+    </script>
+</body>
+</html>
